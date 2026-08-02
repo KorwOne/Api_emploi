@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light">
+    <meta name="supported-color-schemes" content="light">
+    <title>[Job Alerts] {{ nom_profil }} – {{ nb_offres }} nouvelles offres</title>
+    <style>
+        body { margin: 0; padding: 0; background-color: #eef1f6; }
+        table { border-collapse: collapse; }
+        .job-link:hover { background-color: #1d4ed8 !important; }
+    </style>
+</head>
+<body style="margin:0; padding:0; background-color:#eef1f6;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#eef1f6;">
+  <tr>
+    <td align="center" style="padding:24px 12px;">
+      <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" style="max-width:640px; width:100%;">
+
+        <!-- En-tête -->
+        <tr>
+          <td bgcolor="#1e3a8a" style="background-color:#1e3a8a; border-radius:12px 12px 0 0; padding:24px 28px; font-family:Arial, 'Segoe UI', sans-serif;">
+            <p style="margin:0; font-size:20px; font-weight:bold; color:#ffffff !important;">{{ nom_profil }} — {{ nb_offres }} nouvelle(s) offre(s)</p>
+            <p style="margin:6px 0 0; font-size:13px; color:#dbeafe !important;">Récapitulatif généré le {{ date_generation }}</p>
+          </td>
+        </tr>
+
+        <!-- Corps -->
+        <tr>
+          <td bgcolor="#ffffff" style="background-color:#ffffff; border-radius:0 0 12px 12px; padding:8px 28px 24px; font-family:Arial, 'Segoe UI', sans-serif; color:#1f2937;">
+            {{ liste_offres_html }}
+            <p style="margin-top:20px; padding-top:14px; border-top:1px solid #e5e7eb; font-size:11px; color:#9ca3af; line-height:1.5;">
+              Vous recevez cet email car ce profil est actif dans votre script Job Alerts.<br>
+              Périodicité actuelle : toutes les 30 minutes environ.
+            </p>
+          </td>
+        </tr>
+
+      </table>
+    </td>
+  </tr>
+</table>
+</body>
+</html>

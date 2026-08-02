@@ -1,0 +1,18 @@
+# Environnements Python
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets — ne jamais committer
+.env
+config/smtp_config.json
+config/mailtrap_config.json
+config/france_travail_config.json
+
+# Données locales / logs
+data/*.db
+data/*.log
+*.log
+
+# Sauvegardes locales (script de push)
+backups/
