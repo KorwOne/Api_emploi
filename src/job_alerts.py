@@ -11,6 +11,7 @@ from scraper_apec import scraper_apec
 from scraper_jobspy import scraper_jobspy
 from collecte_offres import collecter_offres_pour_profil
 from filtre_ollama import filtrer_offres_avec_ollama
+from filtres import offre_respecte_zone
 
 import smtplib
 import sqlite3
@@ -61,6 +62,17 @@ def filtrer_par_salaire(offres, salaire_min):
 
     return offres_filtrees
 
+def filtrer_par_zone(offres, zones_autorisees):
+    if not zones_autorisees:
+        return offres
+    return [off for off in offres if offre_respecte_zone(off.get("localisation"), zones_autorisees)]
+
+def charger_zones_autorisees(profil_dict):
+    valeur = profil_dict.get("zones_autorisees")
+    if isinstance(valeur, str):
+        return json.loads(valeur) if valeur else {}
+    return valeur or {}
+
 def sync_profils_with_db():
     profils = load_profils()
     conn = get_db_connection()
@@ -80,14 +92,17 @@ def sync_profils_with_db():
         localisation = json.dumps(p.get("localisation", {}), ensure_ascii=False)
         codes_rome = json.dumps(p.get("codes_rome", []), ensure_ascii=False)
         pays_cibles = json.dumps(p.get("pays_cibles", ["FR"]), ensure_ascii=False)
+        zones_autorisees = json.dumps(p.get("zones_autorisees", {}), ensure_ascii=False)
+        apec_lieux = json.dumps(p.get("apec_lieux", []), ensure_ascii=False)
 
         cur.execute(
             """
             INSERT INTO profil (
                 id, nom, email, salaire_min, mots_inclus, mots_exclus,
-                niveau, domaine, moteurs, localisation, codes_rome, pays_cibles, actif
+                niveau, domaine, moteurs, localisation, codes_rome, pays_cibles,
+                zones_autorisees, apec_lieux, actif
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 nom=excluded.nom,
                 email=excluded.email,
@@ -100,11 +115,14 @@ def sync_profils_with_db():
                 localisation=excluded.localisation,
                 codes_rome=excluded.codes_rome,
                 pays_cibles=excluded.pays_cibles,
+                zones_autorisees=excluded.zones_autorisees,
+                apec_lieux=excluded.apec_lieux,
                 actif=excluded.actif
             """,
             (
                 profil_id, nom, email, salaire_min, mots_inclus, mots_exclus,
-                niveau, domaine, moteurs, localisation, codes_rome, pays_cibles, actif
+                niveau, domaine, moteurs, localisation, codes_rome, pays_cibles,
+                zones_autorisees, apec_lieux, actif
             ),
         )
 
@@ -399,8 +417,11 @@ def moteur_jobspy_pour_profil(conn, profil_row):
     offres = scraper_jobspy(profil_dict)
     offres = filtrer_par_salaire(offres, profil_dict.get("salaire_min"))
 
+    zones_autorisees = charger_zones_autorisees(profil_dict)
+    offres = filtrer_par_zone(offres, zones_autorisees)
+
     if not offres:
-        print(f"[jobspy] Profil {profil_id} ({nom_profil}) : aucune offre après filtre salaire.")
+        print(f"[jobspy] Profil {profil_id} ({nom_profil}) : aucune offre après filtre salaire/zone.")
         return
 
     # Tagger la source pour Ollama / logs
@@ -483,9 +504,10 @@ def main():
         profil_dict["mots_inclus"] = json.loads(profil_dict["mots_inclus"]) if isinstance(profil_dict.get("mots_inclus"), str) else profil_dict.get("mots_inclus", [])
         profil_dict["mots_exclus"] = json.loads(profil_dict["mots_exclus"]) if isinstance(profil_dict.get("mots_exclus"), str) else profil_dict.get("mots_exclus", [])
 
-        # 3.1 Scraper France Travail + filtrage salaire
+        # 3.1 Scraper France Travail + filtrage salaire/zone
         offres = scraper_france_travail(profil_dict)
         offres = filtrer_par_salaire(offres, profil_dict.get("salaire_min"))
+        offres = filtrer_par_zone(offres, charger_zones_autorisees(profil_dict))
 
         # 3.2 Tagger la source pour Ollama
         for off in offres:
@@ -522,7 +544,7 @@ def main():
         profil_id = profil_dict["id"]
 
         # Reconstruction des listes à partir du JSON texte
-        for champ in ("mots_inclus", "mots_exclus"):
+        for champ in ("mots_inclus", "mots_exclus", "apec_lieux"):
             valeur = profil_dict.get(champ)
             if isinstance(valeur, str):
                 profil_dict[champ] = json.loads(valeur) if valeur else []
@@ -532,6 +554,7 @@ def main():
         try:
             offres = scraper_apec(profil_dict)
             offres = filtrer_par_salaire(offres, profil_dict.get("salaire_min"))
+            offres = filtrer_par_zone(offres, charger_zones_autorisees(profil_dict))
 
             # Tagger la source pour Ollama
             for off in offres:

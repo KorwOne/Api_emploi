@@ -34,6 +34,8 @@ def init_db():
             localisation                TEXT,
             codes_rome                  TEXT,
             pays_cibles                 TEXT,
+            zones_autorisees            TEXT,
+            apec_lieux                  TEXT,
             actif                       INTEGER NOT NULL DEFAULT 1,
             date_derniere_notification  TEXT
         )
@@ -61,6 +63,12 @@ def init_db():
     for colonne in ("entreprise", "salaire", "localisation", "date_publication"):
         try:
             cur.execute(f"ALTER TABLE offre_vue ADD COLUMN {colonne} TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+    for colonne in ("zones_autorisees", "apec_lieux"):
+        try:
+            cur.execute(f"ALTER TABLE profil ADD COLUMN {colonne} TEXT")
         except sqlite3.OperationalError:
             pass
 

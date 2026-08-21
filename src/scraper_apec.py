@@ -45,7 +45,7 @@ def scraper_apec(profil_dict, range_size=20):
     # Codes numériques internes apec.fr pour "lieux" (aucune API publique pour les
     # résoudre : récupérés en observant le champ de localisation sur apec.fr).
     # 711 = Île-de-France. Défaut si le profil ne précise rien.
-    lieux = profil_dict.get("apec_lieux", ["711"])
+    lieux = profil_dict.get("apec_lieux") or ["711"]
 
     if not mots_cles_list:
         return []
