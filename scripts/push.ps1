@@ -93,13 +93,25 @@ if ($hasChanges) {
 
 # --- Push (Git Credential Manager gere l'authentification GitHub) ---
 Write-Host ""
-Write-Info "[*] Push GitHub sur $branch..."
+Write-Info "[*] Push GitHub sur $branch (origin)..."
 git push origin $branch
 if ($LASTEXITCODE -ne 0) {
-    Write-Err "[!] Le push a echoue"
+    Write-Err "[!] Le push origin a echoue"
     exit 1
+}
+Write-Ok "[+] Push origin reussi !"
+
+# --- Backup sur le second depot (KorwOne/ApiEmploi, prive), si configure ---
+if ($remoteNames -contains "backup") {
+    Write-Host ""
+    Write-Info "[*] Push backup sur $branch (backup)..."
+    git push backup $branch
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "[~] Le push backup a echoue (le push origin est deja passe)"
+    } else {
+        Write-Ok "[+] Push backup reussi !"
+    }
 }
 
 Write-Host ""
-Write-Ok "[+] Push reussi !"
 git log --oneline -5
