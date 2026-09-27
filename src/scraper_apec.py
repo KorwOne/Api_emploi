@@ -1,7 +1,28 @@
+import datetime
 import requests
 from filtres import offre_respecte_salaire_min, offre_respecte_mots_cles, offre_contient_mot_exclu
 
 APEC_API_URL = "https://www.apec.fr/cms/webservices/rechercheOffre"
+
+# Fenêtre de fraîcheur alignée sur celle de France Travail : l'API de recherche
+# apec.fr n'expose pas de paramètre de date, donc chaque cycle renvoie
+# intégralement les mêmes annonces tant qu'elles restent en ligne (déjà vues et
+# écartées par la contrainte UNIQUE en base, mais reclassées inutilement par
+# Ollama à chaque exécution). Filtrer ici sur datePublication réduit ce travail
+# redondant.
+FENETRE_FRAICHEUR = datetime.timedelta(hours=48)
+
+
+def _offre_est_recente(date_publication_texte):
+    """Une date absente ou dans un format inattendu laisse passer l'offre plutôt
+    que de risquer un faux rejet (même logique que offre_respecte_zone)."""
+    if not date_publication_texte:
+        return True
+    try:
+        date_publication = datetime.datetime.strptime(date_publication_texte, "%Y-%m-%dT%H:%M:%S.%f%z")
+    except ValueError:
+        return True
+    return (datetime.datetime.now(datetime.UTC) - date_publication) <= FENETRE_FRAICHEUR
 
 HEADERS = {
     "Content-Type": "application/json;charset=UTF-8",
@@ -75,12 +96,15 @@ def scraper_apec(profil_dict, range_size=20):
             continue
         if not offre_respecte_salaire_min(salaire_texte, salaire_min):
             continue
+        if not _offre_est_recente(date_publication):
+            continue
 
         url = f"https://www.apec.fr/candidat/recherche-emploi.html/emploi/detail-offre/{numero_offre}"
 
         offres.append({
             "job_id": numero_offre,
             "titre": titre,
+            "description": item.get("texteOffre", ""),
             "entreprise": entreprise,
             "salaire": salaire_texte,
             "localisation": localisation,

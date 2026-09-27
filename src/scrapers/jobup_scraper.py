@@ -117,6 +117,29 @@ def _extraire_offres_page(page):
     return offres_uniques
 
 
+def _extraire_description_detail(page, href, timeout=15000):
+    """Visite la page détail d'une offre pour récupérer sa description complète
+    (non disponible depuis la carte de la liste). Retourne une chaîne vide en cas
+    d'échec plutôt que de faire échouer tout le scraping — seules les offres qui
+    passent déjà le filtre titre sont visitées, pour limiter le nombre de requêtes."""
+    try:
+        page.goto(href, timeout=timeout, wait_until="domcontentloaded")
+        page.wait_for_timeout(1500)
+        el = page.query_selector("[data-cy='vacancy-description']")
+        if not el:
+            return ""
+        texte = el.inner_text()
+        # La section contient aussi un widget "match" jobup avant le vrai texte
+        # de l'offre ; on ne garde que ce qui suit ce marqueur s'il est présent.
+        marqueur = "À propos de cette offre"
+        if marqueur in texte:
+            texte = texte.split(marqueur, 1)[1]
+        return texte.strip()
+    except Exception as e:
+        print(f"[jobup] Erreur récupération description ({href}) : {e}")
+        return ""
+
+
 def _correspond_criteres(titre, mots_inclus, mots_exclus):
     if offre_contient_mot_exclu(titre, mots_exclus):
         return False
@@ -176,6 +199,8 @@ def scraper_offres(profil_row, max_pages=1, delai_min=2, delai_max=5):
                         print(f"  -> Titre detecte: {off['titre']} | {off.get('entreprise', '')}")
                         if _correspond_criteres(off["titre"], mots_inclus, mots_exclus):
                             off["job_id"] = f"jobup-{off['job_id']}"
+                            off["description"] = _extraire_description_detail(page, off["url"])
+                            time.sleep(random.uniform(1, 2))
                             toutes_offres.append(off)
 
                     time.sleep(random.uniform(delai_min, delai_max))

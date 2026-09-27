@@ -46,6 +46,39 @@ def offre_contient_mot_exclu(titre, mots_exclus):
     return any(me.lower() in titre_lower for me in mots_exclus)
 
 
+# Mots grammaticaux + vocabulaire courant des intitulés de poste en français.
+# Utilisé pour repérer un titre "entièrement en anglais" par absence de tout
+# marqueur français, plutôt que par une classification LLM (testé peu fiable sur
+# cette tâche précise : le modèle confondait "Director"/"Directeur" et
+# considérait "of" comme un mot français).
+_MARQUEURS_FRANCAIS = {
+    "de", "des", "du", "le", "la", "les", "un", "une", "et", "ou", "à", "au", "aux",
+    "pour", "chez", "dans", "sur", "sous", "avec", "entre", "en", "d", "l",
+    "directeur", "directrice", "responsable", "chef", "cheffe", "adjoint", "adjointe",
+    "gestionnaire", "conseiller", "conseillere", "assistant", "assistante",
+    "charge", "chargee", "groupe", "societe", "entreprise", "national", "nationale",
+    "regional", "regionale", "france", "francais", "francaise",
+}
+_CARACTERES_ACCENTUES_FR = "éèêëàâäùûüôöîïçœ"
+
+
+def titre_entierement_anglais(titre):
+    """Un titre est considéré 'entièrement en anglais' seulement s'il ne contient
+    AUCUN marqueur français identifiable (mot grammatical/vocabulaire courant
+    français, caractère accentué, ou mention 'H/F'/'F/H'). Un titre mixte (ex:
+    'Directeur IT - Head of Infrastructure', 'Responsable SI (CIO)') reste donc
+    considéré comme non-anglais dès qu'un seul marqueur apparaît."""
+    if not titre:
+        return False
+    titre_lower = titre.lower()
+    if any(c in titre_lower for c in _CARACTERES_ACCENTUES_FR):
+        return False
+    if "h/f" in titre_lower or "f/h" in titre_lower:
+        return False
+    mots = re.findall(r"[a-zà-ÿ']+", titre_lower)
+    return not any(mot in _MARQUEURS_FRANCAIS for mot in mots)
+
+
 def _normaliser_texte(texte):
     if not texte:
         return ""
@@ -108,7 +141,60 @@ COMMUNES_IDF_VERS_DEPARTEMENT = {
     "goussainville": "95", "enghien-les-bains": "95",
     "roissy-en-france": "95", "pontoise": "95", "herblay": "95",
     "eaubonne": "95", "domont": "95", "bezons": "95",
+    "la defense": "92", "saint-ouen": "93", "saint-ouen-sur-seine": "93",
+    "neuilly-plaisance": "93",
 }
+
+# Noms de départements d'Île-de-France parfois utilisés seuls par JobSpy
+# (ex: "Essonne, Île-de-France, France").
+DEPARTEMENTS_IDF_PAR_NOM = {
+    "paris": "75", "seine-et-marne": "77", "yvelines": "78", "essonne": "91",
+    "hauts-de-seine": "92", "seine-saint-denis": "93", "val-de-marne": "94",
+    "val-d'oise": "95",
+}
+
+# Régions -> départements. Sert à rejeter une offre dont seule la région est
+# identifiable (cas fréquent chez JobSpy : "Senlis, HDF, FR", "Lyon,
+# Auvergne-Rhône-Alpes, France") quand aucun département autorisé n'en fait partie.
+DEPARTEMENTS_PAR_REGION = {
+    "ile-de-france": ["75", "77", "78", "91", "92", "93", "94", "95"],
+    "hauts-de-france": ["02", "59", "60", "62", "80"],
+    "grand est": ["08", "10", "51", "52", "54", "55", "57", "67", "68", "88"],
+    "normandie": ["14", "27", "50", "61", "76"],
+    "bretagne": ["22", "29", "35", "56"],
+    "pays de la loire": ["44", "49", "53", "72", "85"],
+    "centre-val de loire": ["18", "28", "36", "37", "41", "45"],
+    "bourgogne-franche-comte": ["21", "25", "39", "58", "70", "71", "89", "90"],
+    "auvergne-rhone-alpes": ["01", "03", "07", "15", "26", "38", "42", "43", "63", "69", "73", "74"],
+    "nouvelle-aquitaine": ["16", "17", "19", "23", "24", "33", "40", "47", "64", "79", "86", "87"],
+    "occitanie": ["09", "11", "12", "30", "31", "32", "34", "46", "48", "65", "66", "81", "82"],
+    "provence-alpes-cote d'azur": ["04", "05", "06", "13", "83", "84"],
+    "corse": ["2A", "2B"],
+}
+
+# Abréviations observées chez Indeed/LinkedIn (sigles actuels, anciens codes
+# FIPS des 22 régions, noms anglais), comparées à un segment entier du texte.
+ALIAS_REGIONS = {
+    "idf": "ile-de-france", "a8": "ile-de-france",
+    "hdf": "hauts-de-france", "b4": "hauts-de-france", "b6": "hauts-de-france",
+    "ges": "grand est", "a4": "grand est", "b2": "grand est", "c1": "grand est",
+    "n": "normandie", "nor": "normandie", "a7": "normandie", "normandy": "normandie",
+    "bre": "bretagne", "a2": "bretagne", "brittany": "bretagne",
+    "pdl": "pays de la loire", "b5": "pays de la loire",
+    "cvl": "centre-val de loire", "a3": "centre-val de loire",
+    "bfc": "bourgogne-franche-comte", "a1": "bourgogne-franche-comte", "a6": "bourgogne-franche-comte",
+    "ara": "auvergne-rhone-alpes", "b9": "auvergne-rhone-alpes",
+    "na": "nouvelle-aquitaine", "naq": "nouvelle-aquitaine", "b7": "nouvelle-aquitaine", "b1": "nouvelle-aquitaine",
+    "occ": "occitanie", "b3": "occitanie", "a9": "occitanie",
+    "pac": "provence-alpes-cote d'azur", "paca": "provence-alpes-cote d'azur", "b8": "provence-alpes-cote d'azur",
+    "cor": "corse", "a5": "corse",
+}
+
+
+def _region_de_segment(segment_norm):
+    if segment_norm in DEPARTEMENTS_PAR_REGION:
+        return segment_norm
+    return ALIAS_REGIONS.get(segment_norm)
 
 
 def offre_respecte_zone(localisation_texte, zones_autorisees):
@@ -150,10 +236,60 @@ def offre_respecte_zone(localisation_texte, zones_autorisees):
     # Secours : commune reconnue dans la table Île-de-France (utile pour
     # JobSpy/Indeed/LinkedIn, dont le texte ne contient pas de code département).
     if departements:
-        premiere_ville = _normaliser_texte(texte.split(",")[0])
-        dept_trouve = COMMUNES_IDF_VERS_DEPARTEMENT.get(premiere_ville)
+        segments = [s.strip() for s in texte_norm.split(",")]
+        dept_trouve = COMMUNES_IDF_VERS_DEPARTEMENT.get(segments[0])
         if dept_trouve:
             return dept_trouve in departements
 
+        # Nom de département seul (ex: "Essonne, Île-de-France, France").
+        for segment in segments:
+            dept_trouve = DEPARTEMENTS_IDF_PAR_NOM.get(segment)
+            if dept_trouve:
+                return dept_trouve in departements
+
+        # Seule la région est identifiable (ex: "Senlis, HDF, FR") : rejet si
+        # aucun département autorisé n'appartient à cette région.
+        for segment in segments:
+            region = _region_de_segment(segment)
+            if region:
+                return any(d in departements for d in DEPARTEMENTS_PAR_REGION[region])
+
     # Localisation non identifiable : on ne rejette pas.
     return True
+
+
+def deduire_site_jobspy(url):
+    """JobSpy interroge à la fois Indeed et LinkedIn sous l'étiquette interne
+    unique 'indeed_jobspy' (cf. scraper_jobspy.PAYS_JOBSPY) : distingue les deux
+    via le domaine du lien de l'offre. Retourne None si indéterminable, plutôt
+    que de deviner (utilisé pour l'étiquette affichée en email et dans la fiche
+    Obsidian, pas pour un filtrage qui rejetterait l'offre)."""
+    url_lower = (url or "").lower()
+    if "linkedin.com" in url_lower:
+        return "linkedin"
+    if "indeed.com" in url_lower:
+        return "indeed"
+    return None
+
+
+def offre_est_a_paris(localisation_texte):
+    """Détermine si une offre est située à Paris intra-muros (département 75),
+    à partir du même texte de localisation que offre_respecte_zone. Une
+    localisation absente ou non identifiable est considérée par défaut comme
+    PAS à Paris (usage : masquer l'adresse perso sur le CV envoyé hors Paris —
+    en cas de doute, on préfère masquer plutôt que risquer d'exposer l'adresse)."""
+    if not localisation_texte:
+        return False
+
+    texte = localisation_texte.strip()
+
+    match = re.search(r"^(\d{2})\s*-", texte) or re.search(r"-\s*(\d{2})\b", texte)
+    if match:
+        return match.group(1) == "75"
+
+    texte_norm = _normaliser_texte(texte)
+    if "paris" in texte_norm:
+        return True
+
+    premiere_ville = _normaliser_texte(texte.split(",")[0])
+    return COMMUNES_IDF_VERS_DEPARTEMENT.get(premiere_ville) == "75"

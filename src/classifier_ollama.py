@@ -9,11 +9,15 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 DEFAULT_OLLAMA_HOST = "http://192.168.1.156:11434"
+# Sans timeout, ollama.Client attend indéfiniment : si le serveur distant perd la
+# requête, job_alerts.py reste bloqué et la tâche planifiée saute les exécutions
+# suivantes (MultipleInstances=IgnoreNew) -> plus aucun mail de la journée.
+DEFAULT_OLLAMA_TIMEOUT = 180  # secondes (inclut un éventuel chargement du modèle)
 
 # Client explicite plutôt que ollama.chat() + variable d'env OLLAMA_HOST : cette
 # dernière peut être définie ailleurs sur la machine (ex: 0.0.0.0 par une install
 # locale d'Ollama) et écraserait silencieusement l'hôte distant voulu ici.
-_client = ollama.Client(host=DEFAULT_OLLAMA_HOST)
+_client = ollama.Client(host=DEFAULT_OLLAMA_HOST, timeout=DEFAULT_OLLAMA_TIMEOUT)
 
 
 class ClassificationOffre(BaseModel):

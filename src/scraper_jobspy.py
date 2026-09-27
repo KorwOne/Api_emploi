@@ -92,12 +92,13 @@ def normaliser_offre(row):
     return {
         "job_id": job_url,
         "titre": title,
+        "description": row.get("description") or "",
         "url": job_url,
         "salaire_min": salaire_min,
         "salaire": salaire_texte,
         "localisation": row.get("location"),
         "entreprise": row.get("company"),
-        "date_publication": str(date_posted) if date_posted is not None and str(date_posted) != "NaT" else "",
+        "date_publication": "" if pd.isna(date_posted) else str(date_posted),
     }
 
 
@@ -106,10 +107,32 @@ PAYS_JOBSPY = {
     # systématiquement la résolution de localisation (protection anti-bot, HTTP 400,
     # 0 résultat) et Google échoue à trouver son curseur de pagination (0 résultat).
     # Les deux tournaient à vide en consommant du temps de cycle pour rien.
+    #
+    # "location" est la valeur par défaut pour FR : un profil ciblant tout le
+    # territoire (ex: profil "DSI", type "region" avec plusieurs villes) garde une
+    # recherche nationale. Un profil restreint à une zone précise (type "ville" dans
+    # son champ "localisation", ex: profil "Chef de projet" → Paris/IDF) doit
+    # utiliser une localisation ciblée sinon Indeed/LinkedIn renvoient des offres de
+    # toute la France, et le filtrage géographique en aval (offre_respecte_zone)
+    # laisse passer par défaut toute localisation qu'il n'identifie pas positivement.
     "FR": {"location": "France", "country_indeed": "France", "sites": ["indeed", "linkedin"]},
     "BE": {"location": "Belgium", "country_indeed": "Belgium", "sites": ["indeed"]},
     "LU": {"location": "Luxembourg", "country_indeed": "Luxembourg", "sites": ["indeed"]},
 }
+
+
+def _location_jobspy(pays, profil_dict):
+    """Localisation à envoyer à jobspy pour un pays donné. Pour la France, si le
+    profil restreint sa recherche à une ou plusieurs villes précises (champ
+    "localisation"."FR"."type" == "ville"), on cible la première ville plutôt que
+    tout le pays."""
+    if pays == "FR":
+        loc_fr = (profil_dict.get("localisation") or {}).get("FR", {})
+        if loc_fr.get("type") == "ville":
+            valeurs = loc_fr.get("valeurs") or []
+            if valeurs:
+                return f"{valeurs[0]}, France"
+    return PAYS_JOBSPY[pays]["location"]
 
 
 def scraper_jobspy(profil_dict):
@@ -148,7 +171,7 @@ def scraper_jobspy(profil_dict):
                     TIMEOUT_SCRAPE,
                     site_name=[site],
                     search_term=terme,
-                    location=cfg["location"],
+                    location=_location_jobspy(pays, profil_dict),
                     results_wanted=15,
                     # ne pas passer country_indeed pour LinkedIn/Google (non pertinent pour ces sites)
                     **({"country_indeed": cfg["country_indeed"]} if site in ("indeed", "glassdoor") else {}),

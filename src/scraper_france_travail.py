@@ -51,9 +51,25 @@ def scraper_france_travail(profil):
     if "FR" not in pays_cibles:
         return []
 
-    loc_fr = localisation_par_pays.get("FR", {})
-    villes = loc_fr.get("valeurs", []) if loc_fr.get("type") == "ville" else []
-    codes_departements = list({CODES_DEPARTEMENT_VILLES[v.lower()] for v in villes if v.lower() in CODES_DEPARTEMENT_VILLES})
+    zones_autorisees = profil.get("zones_autorisees") or {}
+    if isinstance(zones_autorisees, str):
+        zones_autorisees = json.loads(zones_autorisees) if zones_autorisees else {}
+
+    # Priorité aux départements explicitement listés dans zones_autorisees : c'est
+    # la source de vérité du profil pour la couverture géographique. La déduction
+    # via CODES_DEPARTEMENT_VILLES (à partir des noms de ville dans "localisation")
+    # ne sert qu'en repli, car elle ne couvre qu'une poignée de villes connues et
+    # peut restreindre la recherche à un seul département (ex: profil autorisant
+    # 75/78/92/94 mais dont "localisation" ne mentionne que "Paris" et "Ile de
+    # France" — seul "Paris" est reconnu, ce qui exclurait 78/92/94 de la
+    # recherche API elle-même, avant même le filtrage géographique en aval).
+    departements_zone = zones_autorisees.get("departements") or []
+    if departements_zone:
+        codes_departements = list(dict.fromkeys(departements_zone))
+    else:
+        loc_fr = localisation_par_pays.get("FR", {})
+        villes = loc_fr.get("valeurs", []) if loc_fr.get("type") == "ville" else []
+        codes_departements = list({CODES_DEPARTEMENT_VILLES[v.lower()] for v in villes if v.lower() in CODES_DEPARTEMENT_VILLES})
 
     end_dt = datetime.datetime.now(datetime.UTC)
     start_dt = end_dt - datetime.timedelta(hours=48)
@@ -101,6 +117,7 @@ def scraper_france_travail(profil):
                 offres_par_id[job_id] = {
                     "job_id": job_id,
                     "titre": titre,
+                    "description": r.get("description", ""),
                     "entreprise": (r.get("entreprise") or {}).get("nom", ""),
                     "salaire": salaire.get("libelle") or salaire.get("commentaire") or "",
                     "localisation": (r.get("lieuTravail") or {}).get("libelle", ""),

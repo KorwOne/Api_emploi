@@ -10,12 +10,15 @@ from scraper_france_travail import scraper_france_travail
 from scraper_apec import scraper_apec
 from scraper_jobspy import scraper_jobspy
 from collecte_offres import collecter_offres_pour_profil
-from filtre_ollama import filtrer_offres_avec_ollama
-from filtres import offre_respecte_zone
+from filtre_ollama import filtrer_offres_avec_ollama, filtrer_titres_anglais
+from filtres import offre_respecte_zone, offre_est_a_paris, deduire_site_jobspy
+from generation_cv import generer_cv_pour_offre
+from generation_fiche_candidature import generer_fiche_candidature
 
 import smtplib
 import sqlite3
 import json
+import sys
 
 # Dossier racine du projet : D:\Work\Python\Api_Emploi
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -25,8 +28,39 @@ SMTP_CONFIG_PATH = BASE_DIR / "config" / "smtp_config.json"
 CONFIG_DIR = BASE_DIR / "config"
 CONFIG_PATH = CONFIG_DIR / "config_profils.json"
 MAILTRAP_CONFIG_PATH = CONFIG_DIR / "mailtrap_config.json"
+LOG_PATH = BASE_DIR / "data" / "job_alerts.log"
 
 JOBSPY_ACTIF = True
+
+
+class _Tee:
+    """Duplique l'écriture vers plusieurs flux (utilisé pour que les print() du
+    pipeline aillent à la fois sur la sortie standard et dans un fichier de log :
+    la tâche planifiée VeilleEmploi ne capture nulle part sa sortie, donc en cas
+    d'échec silencieux (ex: chemin réseau/cloud temporairement indisponible), rien
+    n'était autrement consultable après coup)."""
+
+    def __init__(self, *flux):
+        self._flux = flux
+
+    def write(self, data):
+        # flush immédiat : sans lui, le fichier de log (tamponné) restait figé
+        # pendant de longues minutes et une exécution lente semblait bloquée.
+        for f in self._flux:
+            f.write(data)
+            f.flush()
+
+    def flush(self):
+        for f in self._flux:
+            f.flush()
+
+
+def activer_log_fichier():
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fichier_log = open(LOG_PATH, "a", encoding="utf-8")
+    sys.stdout = _Tee(sys.stdout, fichier_log)
+    sys.stderr = _Tee(sys.stderr, fichier_log)
+    print(f"\n=== Exécution démarrée {datetime.now().isoformat()} ===")
 
 
 def load_profils():
@@ -43,7 +77,109 @@ def load_profils():
 def load_mailtrap_config():
     with MAILTRAP_CONFIG_PATH.open("r", encoding="utf-8") as f:
         return json.load(f)
-    
+
+
+def charger_profils_config():
+    """Retourne {profil_id: profil_dict_complet} à partir de config_profils.json.
+    Sert pour les réglages non synchronisés dans la table SQLite 'profil' (pas de
+    colonne prévue), ex : 'cv', 'exclure_titres_anglais'."""
+    return {p["profil_id"]: p for p in load_profils()}
+
+
+def generer_cv_pour_nouvelle_offre(profil_id, nom_profil, off, profils_config, numero_offre=None):
+    """Génère un CV adapté à l'offre si le profil concerné a un CV associé
+    (profils_config[profil_id]['cv'] non None). Ne doit jamais interrompre le
+    pipeline principal : toute erreur (Ollama injoignable, Word absent, etc.) est
+    journalisée puis ignorée.
+
+    `numero_offre` (id de l'offre en base, cf. enregistrer_offre_si_nouvelle) est
+    préfixé au nom du fichier du CV généré pour relier facilement un CV à son
+    annonce.
+
+    Retourne le chemin du CV généré (docx ou pdf), ou None si aucun CV n'a été
+    généré (profil sans CV configuré, ou erreur)."""
+    profil_config = profils_config.get(profil_id, {})
+    cv_config = profil_config.get("cv")
+    if not cv_config:
+        return None
+    masquer_adresse = bool(profil_config.get("masquer_adresse_hors_paris")) and not offre_est_a_paris(
+        off.get("localisation")
+    )
+    try:
+        resultat = generer_cv_pour_offre(
+            titre_offre=off.get("titre") or "",
+            description_offre=off.get("description") or "",
+            angles_autorises=cv_config["angles"],
+            entreprise=off.get("entreprise"),
+            cv_source_path=BASE_DIR / cv_config["source"],
+            masquer_adresse=masquer_adresse,
+            numero_offre=numero_offre,
+        )
+        chemin = Path(resultat["chemin_pdf"] or resultat["chemin_docx"])
+        print(
+            f"[cv] Profil {profil_id} ({nom_profil}) : CV #{numero_offre} généré pour '{off.get('titre')}' "
+            f"(angle={resultat['angle']}, {resultat['nb_pages']} page(s)) -> {chemin}"
+        )
+        return chemin
+    except Exception as e:
+        print(
+            f"[cv] Profil {profil_id} ({nom_profil}) : ERREUR génération CV pour "
+            f"'{off.get('titre')}' — {e}"
+        )
+        return None
+
+
+def generer_fiche_candidature_pour_nouvelle_offre(profil_id, nom_profil, off, profils_config, numero_offre, source, cv_chemin=None):
+    """Génère la fiche de candidature Obsidian (template Candidature.md) pour
+    l'offre si le profil concerné a l'option activée
+    (profils_config[profil_id]['fiche_candidature'] vrai). Ne doit jamais
+    interrompre le pipeline principal : toute erreur est journalisée puis
+    ignorée."""
+    profil_config = profils_config.get(profil_id, {})
+    if not profil_config.get("fiche_candidature"):
+        return
+    try:
+        chemin = generer_fiche_candidature(
+            off,
+            numero_offre=numero_offre,
+            source=source,
+            cv_filename=cv_chemin.name if cv_chemin else None,
+        )
+        if chemin:
+            print(
+                f"[fiche_candidature] Profil {profil_id} ({nom_profil}) : fiche #{numero_offre} générée pour "
+                f"'{off.get('titre')}' -> {chemin}"
+            )
+    except Exception as e:
+        print(
+            f"[fiche_candidature] Profil {profil_id} ({nom_profil}) : ERREUR génération fiche pour "
+            f"'{off.get('titre')}' — {e}"
+        )
+
+
+# Offres nouvellement enregistrées dont le CV / la fiche restent à générer. Cette
+# génération (plusieurs dizaines de secondes par offre) est faite APRÈS l'envoi du
+# digest, pour que le mail ne soit pas retardé par elle.
+_offres_a_traiter = []
+
+
+def traiter_nouvelle_offre(profil_id, nom_profil, off, profils_config, numero_offre, source):
+    """Point d'entrée unique appelé pour chaque offre nouvellement enregistrée en
+    base : met l'offre en file ; le CV et la fiche seront générés par
+    traiter_offres_en_attente() une fois le digest envoyé."""
+    _offres_a_traiter.append((profil_id, nom_profil, off, profils_config, numero_offre, source))
+
+
+def traiter_offres_en_attente():
+    """Génère le CV adapté puis la fiche de candidature Obsidian de chaque offre mise
+    en file, chacun conditionné à la configuration du profil."""
+    while _offres_a_traiter:
+        profil_id, nom_profil, off, profils_config, numero_offre, source = _offres_a_traiter.pop(0)
+        cv_chemin = generer_cv_pour_nouvelle_offre(profil_id, nom_profil, off, profils_config, numero_offre=numero_offre)
+        generer_fiche_candidature_pour_nouvelle_offre(
+            profil_id, nom_profil, off, profils_config, numero_offre, source, cv_chemin=cv_chemin
+        )
+
 def filtrer_par_salaire(offres, salaire_min):
     if not salaire_min:
         return offres
@@ -158,9 +294,20 @@ SOURCES_META = {
     "jobup.ch": {"label": "JobUp.ch", "color": "#0b5ed7", "emoji": "🇨🇭"},
     "france_travail": {"label": "France Travail", "color": "#000091", "emoji": "🇫🇷"},
     "apec": {"label": "Apec", "color": "#7c3aed", "emoji": "🎓"},
-    "indeed_jobspy": {"label": "Indeed", "color": "#2557a7", "emoji": "🔎"},
+    "indeed": {"label": "Indeed", "color": "#2557a7", "emoji": "🔎"},
+    "linkedin": {"label": "LinkedIn", "color": "#0a66c2", "emoji": "💼"},
     "moteur_fictif": {"label": "Test", "color": "#6b7280", "emoji": "🧪"},
 }
+
+
+def _cle_source_email(source, url):
+    """JobSpy interroge à la fois Indeed et LinkedIn sous l'étiquette interne
+    unique 'indeed_jobspy' : on les distingue ici pour l'affichage email (badge
+    de source) via le domaine du lien, plutôt que d'afficher "Indeed" pour les
+    deux sites."""
+    if source == "indeed_jobspy":
+        return deduire_site_jobspy(url) or "indeed"
+    return source
 
 
 def _formater_date_vue(date_vue):
@@ -188,7 +335,7 @@ def render_email_html(template, nom_profil, offres_rows):
 
     groupes = {}
     for row in offres_rows:
-        groupes.setdefault(row["source"], []).append(row)
+        groupes.setdefault(_cle_source_email(row["source"], row["url"]), []).append(row)
 
     sections_html = []
     for source, rows in groupes.items():
@@ -196,6 +343,10 @@ def render_email_html(template, nom_profil, offres_rows):
 
         items_html = []
         for row in rows:
+            # Même numéro (id de l'offre en base) que celui préfixé au nom du fichier
+            # du CV généré (cf. generation_cv.generer_cv_pour_offre) : affiché dans le
+            # mail pour relier facilement une annonce à son CV.
+            numero = f"N°{row['id']:04d} — "
             titre = escape_html(row["titre"] or "(Titre non renseigné)")
             url = row["url"] or "#"
             date_vue = _formater_date_vue(row["date_vue"])
@@ -221,7 +372,7 @@ def render_email_html(template, nom_profil, offres_rows):
 
             items_html.append(f"""
             <div style="background-color:#ffffff; border:1px solid #e5e7eb; border-radius:6px; padding:12px 14px; margin-top:8px;">
-                <p style="margin:0 0 4px; font-size:14px; font-weight:600; color:#111827 !important;">{titre}</p>
+                <p style="margin:0 0 4px; font-size:14px; font-weight:600; color:#111827 !important;"><span style="color:#6b7280 !important; font-weight:700;">{numero}</span>{titre}</p>
                 {ligne_details}
                 <p style="margin:0 0 8px; font-size:11px; color:#9ca3af !important;">Vu le {date_vue}</p>
                 <a class="job-link" href="{url}" target="_blank" rel="noopener noreferrer" style="display:inline-block; font-size:13px; font-weight:600; color:#ffffff !important; background-color:#2563eb; text-decoration:none; padding:6px 12px; border-radius:5px;">Voir l'offre →</a>
@@ -257,7 +408,10 @@ def enregistrer_offre_si_nouvelle(conn, profil_id, source, job_id, titre, url,
                                    date_publication=None):
     """
     Enregistrer une offre en base si elle n'existe pas encore pour ce profil.
-    Retourne True si l'offre est nouvelle, False sinon.
+    Retourne le numéro (id auto-incrémenté, unique et croissant) de l'offre si elle
+    est nouvelle, None sinon. Ce numéro sert aussi à préfixer le nom du fichier du
+    CV généré pour cette offre (voir generer_cv_pour_nouvelle_offre) afin de
+    relier facilement un CV à son annonce.
     """
     cur = conn.cursor()
     now = datetime.now(timezone.utc).isoformat()
@@ -274,10 +428,10 @@ def enregistrer_offre_si_nouvelle(conn, profil_id, source, job_id, titre, url,
              entreprise, salaire, localisation, date_publication),
         )
         conn.commit()
-        return True
+        return cur.lastrowid
     except sqlite3.IntegrityError:
         # L'offre existe déjà (contrainte UNIQUE (profil_id, source, job_id))
-        return False
+        return None
 
 def get_offres_non_notifiees(conn, profil_id):
     """Récupérer les offres d'un profil qui n'ont pas encore été incluses dans un mail."""
@@ -350,11 +504,12 @@ def moteur_fictif_pour_profil(conn, profil_row):
 
     print(f"[moteur_fictif] Profil {profil_id} ({nom_profil}) : {nb_nouvelles} nouvelle(s) offre(s) ajoutée(s).")
 
-def moteur_jobup_pour_profil(conn, profil_row):
+def moteur_jobup_pour_profil(conn, profil_row, profils_config):
     profil_id = profil_row["id"]
     nom_profil = profil_row["nom"]
 
     offres = scraper_offres(profil_row)
+    offres = filtrer_titres_anglais(offres, profils_config.get(profil_id, {}))
 
     nb_nouvelles = 0
     for off in offres:
@@ -371,6 +526,7 @@ def moteur_jobup_pour_profil(conn, profil_row):
         )
         if ok:
             nb_nouvelles += 1
+            traiter_nouvelle_offre(profil_id, nom_profil, off, profils_config, numero_offre=ok, source="jobup.ch")
 
     print(f"[jobup] Profil {profil_id} ({nom_profil}) : {nb_nouvelles} nouvelle(s) offre(s) ajoutée(s).")
     
@@ -397,7 +553,7 @@ def afficher_profils(profils):
             print(f"  - {mot}")
         print("-" * 40)
 
-def moteur_jobspy_pour_profil(conn, profil_row):
+def moteur_jobspy_pour_profil(conn, profil_row, profils_config):
     profil_id = profil_row["id"]
     nom_profil = profil_row["nom"]
 
@@ -409,6 +565,12 @@ def moteur_jobspy_pour_profil(conn, profil_row):
             profil_dict[champ] = json.loads(valeur) if valeur else []
         elif valeur is None:
             profil_dict[champ] = []
+
+    valeur_localisation = profil_dict.get("localisation")
+    if isinstance(valeur_localisation, str):
+        profil_dict["localisation"] = json.loads(valeur_localisation) if valeur_localisation else {}
+    elif valeur_localisation is None:
+        profil_dict["localisation"] = {}
 
     if "FR" not in profil_dict.get("pays_cibles", ["FR"]):
         print(f"[jobspy] Profil {profil_id} ({nom_profil}) ignoré (pas de cible FR).")
@@ -427,6 +589,8 @@ def moteur_jobspy_pour_profil(conn, profil_row):
     # Tagger la source pour Ollama / logs
     for off in offres:
         off["source"] = "indeed_jobspy"
+
+    offres = filtrer_titres_anglais(offres, profils_config.get(profil_id, {}))
 
     # Filtre sémantique Ollama
     offres = filtrer_offres_avec_ollama(offres, profil_dict)
@@ -452,10 +616,16 @@ def moteur_jobspy_pour_profil(conn, profil_row):
         )
         if ok:
             nb_nouvelles += 1
+            traiter_nouvelle_offre(
+                profil_id, nom_profil, off, profils_config, numero_offre=ok,
+                source=off.get("source", "indeed_jobspy"),
+            )
 
     print(f"[jobspy] Profil {profil_id} ({nom_profil}) : {nb_nouvelles} nouvelle(s) offre(s) ajoutée(s).")
         
 def main():
+    activer_log_fichier()
+
     # 1. S'assurer que la base et les tables existent
     init_db()
     sync_profils_with_db()
@@ -469,10 +639,12 @@ def main():
     cur.execute("SELECT * FROM profil WHERE actif = 1 ORDER BY id")
     profils_rows = cur.fetchall()
 
+    profils_config = charger_profils_config()
+
     # 2. jobup / moteur fictif
     for profil_row in profils_rows:
         if profil_row["nom"] == "DSI":
-            moteur_jobup_pour_profil(conn, profil_row)
+            moteur_jobup_pour_profil(conn, profil_row, profils_config)
         else:
             moteur_fictif_pour_profil(conn, profil_row)
 
@@ -480,7 +652,7 @@ def main():
     if JOBSPY_ACTIF:
         for profil_row in profils_rows:
             try:
-                moteur_jobspy_pour_profil(conn, profil_row)
+                moteur_jobspy_pour_profil(conn, profil_row, profils_config)
             except Exception as e:
                 print(f"[jobspy] Profil {profil_row['id']} ({profil_row['nom']}) : ERREUR — {e}")
     else:
@@ -513,6 +685,8 @@ def main():
         for off in offres:
             off["source"] = "france_travail"
 
+        offres = filtrer_titres_anglais(offres, profils_config.get(profil_id, {}))
+
         # 3.3 Filtre sémantique Ollama avec les mots_inclus/exclus du profil
         offres = filtrer_offres_avec_ollama(offres, profil_dict)
 
@@ -535,6 +709,9 @@ def main():
             )
             if ok:
                 nb_nouvelles += 1
+                traiter_nouvelle_offre(
+                    profil_id, profil_dict["nom"], off, profils_config, numero_offre=ok, source="france_travail"
+                )
 
         print(f"[france_travail] Profil {profil_id} ({profil_dict['nom']}) : {nb_nouvelles} nouvelle(s) offre(s) ajoutée(s).")
                 
@@ -560,6 +737,8 @@ def main():
             for off in offres:
                 off["source"] = "apec"
 
+            offres = filtrer_titres_anglais(offres, profils_config.get(profil_id, {}))
+
             # Filtre sémantique Ollama avec les mots_inclus/exclus du profil
             offres = filtrer_offres_avec_ollama(offres, profil_dict)
 
@@ -581,6 +760,9 @@ def main():
                 )
                 if ok:
                     nb_nouvelles += 1
+                    traiter_nouvelle_offre(
+                        profil_id, profil_dict["nom"], off, profils_config, numero_offre=ok, source="apec"
+                    )
 
             print(f"[apec] Profil {profil_id} ({profil_dict['nom']}) : {nb_nouvelles} nouvelle(s) offre(s) ajoutée(s).")
         except Exception as e:
@@ -610,6 +792,9 @@ def main():
             print(f"[digest] Profil {profil_id} ({nom_profil}) : ERREUR lors de l'envoi — {e}")
 
     conn.close()
+
+    # 5. CV + fiches de candidature des nouvelles offres (après le mail)
+    traiter_offres_en_attente()
 
 
 if __name__ == "__main__":

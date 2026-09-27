@@ -20,27 +20,28 @@
         "pmo", 
         "régie broadcast"],
       "domaine": [
-        "informatique", 
-        "si", 
-        "it", 
-        "digital", 
-        "erp", 
+        "informatique",
+        "si",
+        "it",
+        "digital",
+        "erp",
         "sirh",
-        "infrastructure", 
-        "cybersécurité", 
-        "cybersecurite", 
+        "infrastructure",
+        "cybersécurité",
+        "cybersecurite",
         "cloud",
-        "applicatif", 
-        "logiciel", 
-        "système", 
-        "systèmes", 
+        "applicatif",
+        "logiciel",
+        "système",
+        "systèmes",
         "réseau",
-        "reseau", 
-        "data", 
-        "sap", 
-        "crm", 
+        "reseau",
+        "data",
+        "sap",
+        "crm",
         "technique"
       ],
+      "niveau": ["chef", "responsable", "manager"],
       "codes_rome": ["M1802", "M1803", "M1806"],
       "salaire_min": 50000,
       "actif": true,
@@ -67,7 +68,8 @@
         "Saint-Maur-Créteil"
       ]
     },
-      "email": "candidaturecdpi@protonmail.com"
+      "email": "candidaturecdpi@protonmail.com",
+      "cv": null
     },
     {
       "profil_id": 2,
@@ -134,7 +136,9 @@
         "pmo",
         "sre",
         "head of data",
-        "data engineer"],
+        "data engineer",
+        "international",
+        "internationale"],
       "domaine": ["informatique",
         "système",
         "systèmes",
@@ -156,7 +160,14 @@
         "CH": {"type": "cantons", "valeurs": ["Vaud", "geneve", "neuchatel", "Jura", "Valais", "Fribourg", "Berne"]}
       },
       "apec_lieux": ["711", "596717", "583319", "577013", "573572", "572357", "572920", "587878", "596716"],
-      "email": "xavier.kervagoret@outlook.fr"
+      "email": "xavier.kervagoret@outlook.fr",
+      "cv": {
+        "source": "data/cv/cv_source.json",
+        "angles": ["dsi", "infra"]
+      },
+      "exclure_titres_anglais": true,
+      "masquer_adresse_hors_paris": true,
+      "fiche_candidature": true
     }
   ]
 }
